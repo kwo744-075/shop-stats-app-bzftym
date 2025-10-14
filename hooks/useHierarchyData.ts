@@ -11,6 +11,7 @@ export const useHierarchyData = () => {
   // Load hierarchy data from Supabase
   const loadHierarchyData = useCallback(async () => {
     try {
+      console.log('useHierarchyData: Loading hierarchy data...');
       setLoading(true);
       setError(null);
 
@@ -43,12 +44,15 @@ export const useHierarchyData = () => {
         isActive: shop.is_active
       })) || [];
 
-      setHierarchy({
+      const hierarchyData = {
         districtManagerName: settings?.district_manager_name || 'District Manager',
         districtId: 'default', // We'll use a default district ID for now
         shops,
         lastUpdated: new Date().toISOString()
-      });
+      };
+      
+      console.log('useHierarchyData: Loaded hierarchy data:', hierarchyData);
+      setHierarchy(hierarchyData);
 
     } catch (err) {
       console.error('Error loading hierarchy data:', err);
@@ -228,11 +232,17 @@ export const useHierarchyData = () => {
     return hierarchy?.shops.find(shop => shop.number === shopNumber);
   }, [hierarchy]);
 
+  // Refresh hierarchy data
+  const refreshHierarchy = useCallback(async () => {
+    await loadHierarchyData();
+  }, [loadHierarchyData]);
+
   return {
     hierarchy,
     loading,
     error,
     loadHierarchyData,
+    refreshHierarchy,
     updateDistrictManagerName,
     updateShopName,
     toggleShopActive,

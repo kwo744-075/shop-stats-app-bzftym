@@ -132,6 +132,68 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     lineHeight: 20,
   },
+  // Shop Selection styles
+  shopSelectionSection: {
+    marginBottom: 30,
+  },
+  shopSelectionCard: {
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 15,
+  },
+  shopSelectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  shopSelectionDescription: {
+    fontSize: 14,
+    opacity: 0.7,
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  shopGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  shopChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    minWidth: 60,
+    alignItems: 'center',
+  },
+  selectedShopChip: {
+    // Selected styling handled by backgroundColor and borderColor
+  },
+  shopChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  selectedShopInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  selectedShopText: {
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  // Action buttons with better visibility
+  actionButton: {
+    marginBottom: 12,
+    minHeight: 48,
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });
 
 export default function ProfileScreen() {
@@ -146,16 +208,49 @@ export default function ProfileScreen() {
   const [editingName, setEditingName] = useState(false);
   const [tempName, setTempName] = useState('');
   const [migrationLoading, setMigrationLoading] = useState(false);
+  const [selectedShopId, setSelectedShopId] = useState<string | null>(null);
 
   const hasInitialized = useMemo(() => {
     return setupData.shops.length > 0 && hierarchy !== null;
   }, [setupData.shops.length, hierarchy]);
+
+  // Get active shops sorted by number
+  const activeShops = useMemo(() => {
+    return setupData.shops
+      .filter(shop => shop.isActive)
+      .sort((a, b) => a.number - b.number);
+  }, [setupData.shops]);
+
+  // Get selected shop details
+  const selectedShop = useMemo(() => {
+    if (!selectedShopId) return null;
+    return setupData.shops.find(shop => shop.id === selectedShopId);
+  }, [selectedShopId, setupData.shops]);
 
   useEffect(() => {
     if (hierarchy?.districtManagerName) {
       setTempName(hierarchy.districtManagerName);
     }
   }, [hierarchy?.districtManagerName]);
+
+  // Load selected shop from storage
+  useEffect(() => {
+    const loadSelectedShop = async () => {
+      try {
+        const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+        const savedShopId = await AsyncStorage.getItem('selectedShopId');
+        if (savedShopId && setupData.shops.some(shop => shop.id === savedShopId)) {
+          setSelectedShopId(savedShopId);
+        }
+      } catch (error) {
+        console.error('Error loading selected shop:', error);
+      }
+    };
+
+    if (setupData.shops.length > 0) {
+      loadSelectedShop();
+    }
+  }, [setupData.shops]);
 
   const refreshSetupData = useCallback(() => {
     // This will trigger a re-render with fresh data
@@ -202,6 +297,34 @@ export default function ProfileScreen() {
   const getModeColor = () => {
     return colors.primary;
   };
+
+  const handleSelectShop = useCallback(async (shopId: string) => {
+    try {
+      setSelectedShopId(shopId);
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      await AsyncStorage.setItem('selectedShopId', shopId);
+      
+      const shop = setupData.shops.find(s => s.id === shopId);
+      if (shop) {
+        Alert.alert('Shop Selected', `You are now in shop mode for Shop #${shop.number} (${shop.name})`);
+      }
+    } catch (error) {
+      console.error('Error saving selected shop:', error);
+      Alert.alert('Error', 'Failed to save shop selection');
+    }
+  }, [setupData.shops]);
+
+  const handleClearShopSelection = useCallback(async () => {
+    try {
+      setSelectedShopId(null);
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      await AsyncStorage.removeItem('selectedShopId');
+      Alert.alert('Shop Selection Cleared', 'You are now in district manager mode');
+    } catch (error) {
+      console.error('Error clearing shop selection:', error);
+      Alert.alert('Error', 'Failed to clear shop selection');
+    }
+  }, []);
 
   const handleMigrateData = async () => {
     try {
@@ -286,6 +409,63 @@ export default function ProfileScreen() {
           <Text style={[styles.modeText, { color: getModeColor() }]}>
             Supabase Mode - Data synced to cloud
           </Text>
+        </View>
+
+        {/* Shop Selection */}
+        <View style={styles.shopSelectionSection}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Shop Selection</Text>
+          <GlassView style={[styles.shopSelectionCard, { backgroundColor: colors.card + '80' }]}>
+            <Text style={[styles.shopSelectionTitle, { color: colors.text }]}>
+              Select Your Shop
+            </Text>
+            <Text style={[styles.shopSelectionDescription, { color: colors.text }]}>
+              Choose a shop to enter shop mode, or leave unselected for district manager mode.
+            </Text>
+            
+            {/* Current Selection */}
+            {selectedShop && (
+              <View style={[styles.selectedShopInfo, { backgroundColor: colors.primary + '20', borderColor: colors.primary + '40', borderWidth: 1 }]}>
+                <IconSymbol name="checkmark.circle.fill" size={20} color={colors.primary} />
+                <Text style={[styles.selectedShopText, { color: colors.primary }]}>
+                  Currently selected: Shop #{selectedShop.number} ({selectedShop.name})
+                </Text>
+              </View>
+            )}
+            
+            {/* Shop Grid */}
+            <View style={styles.shopGrid}>
+              {activeShops.map((shop) => (
+                <TouchableOpacity
+                  key={shop.id}
+                  style={[
+                    styles.shopChip,
+                    selectedShopId === shop.id && styles.selectedShopChip,
+                    { 
+                      borderColor: selectedShopId === shop.id ? colors.primary : colors.border,
+                      backgroundColor: selectedShopId === shop.id ? colors.primary : colors.card
+                    }
+                  ]}
+                  onPress={() => handleSelectShop(shop.id)}
+                >
+                  <Text style={[
+                    styles.shopChipText,
+                    { color: selectedShopId === shop.id ? 'white' : colors.text }
+                  ]}>
+                    #{shop.number}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            {selectedShopId && (
+              <Button
+                title="Clear Selection (District Mode)"
+                onPress={handleClearShopSelection}
+                variant="secondary"
+                style={styles.actionButton}
+              />
+            )}
+          </GlassView>
         </View>
 
         {/* District Manager Info */}
@@ -376,16 +556,25 @@ export default function ProfileScreen() {
           <Button
             title="Master Setup"
             onPress={() => setShowMasterSetup(true)}
-            style={{ marginBottom: 15 }}
+            style={[styles.actionButton, { backgroundColor: colors.primary }]}
             disabled={setupLoading || hierarchyLoading}
-          />
+          >
+            <Text style={[styles.actionButtonText, { color: 'white' }]}>
+              Master Setup
+            </Text>
+          </Button>
           
           <Button
             title="Generate Test Data"
             onPress={generateTestCheckIns}
             variant="secondary"
+            style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}
             disabled={checkInLoading}
-          />
+          >
+            <Text style={[styles.actionButtonText, { color: colors.text }]}>
+              Generate Test Data
+            </Text>
+          </Button>
         </View>
 
         {/* Data Migration Section */}

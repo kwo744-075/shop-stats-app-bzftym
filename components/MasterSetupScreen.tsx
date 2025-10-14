@@ -20,10 +20,19 @@ import { useMasterSetup } from '@/hooks/useMasterSetup';
 import { MasterShop, District } from '@/types/SetupData';
 import Button from '@/components/button';
 import * as Haptics from 'expo-haptics';
+import { useCheckInData } from '@/hooks/useCheckInData';
 
 interface MasterSetupScreenProps {
   visible: boolean;
   onClose: () => void;
+}
+
+interface CommunicationSchedule {
+  id: string;
+  message: string;
+  schedule_time: string;
+  schedule_days: string[];
+  is_active: boolean;
 }
 
 const DEFAULT_PASSWORD = 'take5';
@@ -31,6 +40,7 @@ const DEFAULT_PASSWORD = 'take5';
 export default function MasterSetupScreen({ visible, onClose }: MasterSetupScreenProps) {
   const theme = useTheme();
   const { setupData, loading, addShop, updateShop, deleteShop, addDistrict, updateDistrict, deleteDistrict, updateMetricGoals } = useMasterSetup();
+  const { generateTestCheckIns } = useCheckInData();
   
   // Authentication state
   const [password, setPassword] = useState('');
@@ -51,16 +61,17 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
   // Tab state
   const [activeTab, setActiveTab] = useState<'shops' | 'districts' | 'goals'>('shops');
   
-  // Metric goals form state
-  const [goalsCars, setGoalsCars] = useState('0');
-  const [goalsSales, setGoalsSales] = useState('0');
+  // KPI goals form state (only Big4, coolants, diffs, mobil1 as percentages)
   const [goalsBig4, setGoalsBig4] = useState('0');
   const [goalsCoolants, setGoalsCoolants] = useState('0');
   const [goalsDiffs, setGoalsDiffs] = useState('0');
-  const [goalsDonations, setGoalsDonations] = useState('0');
   const [goalsMobil1, setGoalsMobil1] = useState('0');
-  const [goalsStaffing, setGoalsStaffing] = useState('0');
-  const [goalsTemperature, setGoalsTemperature] = useState<'red' | 'yellow' | 'green'>('green');
+
+  // Communication Schedule state
+  const [communicationSchedules, setCommunicationSchedules] = useState<CommunicationSchedule[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [newScheduleTime, setNewScheduleTime] = useState('09:00');
+  const [editingSchedule, setEditingSchedule] = useState<CommunicationSchedule | null>(null);
 
   // Memoize active shops sorted by shop number
   const activeShops = useMemo(() => {
@@ -103,17 +114,17 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
     setEditDistrictName('');
     setSelectedShopsForDistrict([]);
     
-    // Reset goals form to current values or defaults
+    // Reset KPI goals form to current values or defaults
     const goals = setupData?.metricGoals;
-    setGoalsCars(goals?.cars?.toString() || '0');
-    setGoalsSales(goals?.sales?.toString() || '0');
     setGoalsBig4(goals?.big4?.toString() || '0');
     setGoalsCoolants(goals?.coolants?.toString() || '0');
     setGoalsDiffs(goals?.diffs?.toString() || '0');
-    setGoalsDonations(goals?.donations?.toString() || '0');
     setGoalsMobil1(goals?.mobil1?.toString() || '0');
-    setGoalsStaffing(goals?.staffing?.toString() || '0');
-    setGoalsTemperature(goals?.temperature || 'green');
+
+    // Reset communication schedule forms
+    setNewMessage('');
+    setNewScheduleTime('09:00');
+    setEditingSchedule(null);
   }, [setupData?.metricGoals]);
 
   useEffect(() => {
@@ -129,21 +140,42 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
     if (setupData && !loading) {
       console.log('MasterSetupScreen: Setup data loaded', setupData);
       
-      // Initialize goals form with current values
+      // Initialize KPI goals form with current values
       const goals = setupData.metricGoals;
       if (goals) {
-        setGoalsCars(goals.cars.toString());
-        setGoalsSales(goals.sales.toString());
         setGoalsBig4(goals.big4.toString());
         setGoalsCoolants(goals.coolants.toString());
         setGoalsDiffs(goals.diffs.toString());
-        setGoalsDonations(goals.donations.toString());
         setGoalsMobil1(goals.mobil1.toString());
-        setGoalsStaffing(goals.staffing.toString());
-        setGoalsTemperature(goals.temperature);
       }
     }
   }, [setupData, loading]);
+
+  // Load communication schedules
+  const loadCommunicationSchedules = useCallback(async () => {
+    try {
+      const { supabase } = await import('@/app/integrations/supabase/client');
+      const { data, error } = await supabase
+        .from('communication_schedules')
+        .select('*')
+        .order('created_at');
+
+      if (error) {
+        console.error('Error loading communication schedules:', error);
+        return;
+      }
+
+      setCommunicationSchedules(data || []);
+    } catch (error) {
+      console.error('Error loading communication schedules:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (visible && isAuthenticated) {
+      loadCommunicationSchedules();
+    }
+  }, [visible, isAuthenticated, loadCommunicationSchedules]);
 
   const handlePasswordSubmit = useCallback(() => {
     if (password === DEFAULT_PASSWORD) {
@@ -174,7 +206,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
       return;
     }
 
-    // Fix: Pass the correct structure to addShop
     const success = await addShop({
       number: shopNumber,
       name: newShopName.trim(),
@@ -214,7 +245,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
     }
   }, [editingShop, editShopName, updateShop]);
 
-  // FIXED: Enhanced delete shop function with district assignment check
   const handleDeleteShop = useCallback((shop: MasterShop) => {
     console.log('handleDeleteShop called for shop:', shop);
     
@@ -348,27 +378,104 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
     );
   }, []);
 
-  const handleSaveMetricGoals = useCallback(async () => {
+  const handleSaveKPIGoals = useCallback(async () => {
     try {
       const goals = {
-        cars: parseInt(goalsCars) || 0,
-        sales: parseFloat(goalsSales) || 0,
+        // Keep existing values for removed fields
+        cars: setupData?.metricGoals?.cars || 0,
+        sales: setupData?.metricGoals?.sales || 0,
+        staffing: setupData?.metricGoals?.staffing || 0,
+        donations: setupData?.metricGoals?.donations || 0,
+        temperature: setupData?.metricGoals?.temperature || 'green',
+        // Update only KPI goals (as percentages)
         big4: parseInt(goalsBig4) || 0,
         coolants: parseInt(goalsCoolants) || 0,
         diffs: parseInt(goalsDiffs) || 0,
-        donations: parseFloat(goalsDonations) || 0,
         mobil1: parseInt(goalsMobil1) || 0,
-        staffing: parseInt(goalsStaffing) || 0,
-        temperature: goalsTemperature
       };
 
       await updateMetricGoals(goals);
-      Alert.alert('Success', 'Metric goals updated successfully!');
+      Alert.alert('Success', 'KPI goals updated successfully!');
     } catch (error) {
-      console.log('Error updating metric goals:', error);
-      Alert.alert('Error', 'Failed to update metric goals. Please try again.');
+      console.log('Error updating KPI goals:', error);
+      Alert.alert('Error', 'Failed to update KPI goals. Please try again.');
     }
-  }, [goalsCars, goalsSales, goalsBig4, goalsCoolants, goalsDiffs, goalsDonations, goalsMobil1, goalsStaffing, goalsTemperature, updateMetricGoals]);
+  }, [goalsBig4, goalsCoolants, goalsDiffs, goalsMobil1, setupData?.metricGoals, updateMetricGoals]);
+
+  // Communication Schedule functions
+  const handleAddCommunicationSchedule = useCallback(async () => {
+    if (!newMessage.trim()) {
+      Alert.alert('Invalid Input', 'Please enter a message.');
+      return;
+    }
+
+    try {
+      const { supabase } = await import('@/app/integrations/supabase/client');
+      const { error } = await supabase
+        .from('communication_schedules')
+        .insert({
+          message: newMessage.trim(),
+          schedule_time: newScheduleTime,
+          schedule_days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+          is_active: true
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      Alert.alert('Success', 'Communication schedule added successfully!');
+      setNewMessage('');
+      setNewScheduleTime('09:00');
+      await loadCommunicationSchedules();
+    } catch (error) {
+      console.error('Error adding communication schedule:', error);
+      Alert.alert('Error', 'Failed to add communication schedule.');
+    }
+  }, [newMessage, newScheduleTime, loadCommunicationSchedules]);
+
+  const handleDeleteCommunicationSchedule = useCallback(async (scheduleId: string) => {
+    try {
+      const { supabase } = await import('@/app/integrations/supabase/client');
+      const { error } = await supabase
+        .from('communication_schedules')
+        .delete()
+        .eq('id', scheduleId);
+
+      if (error) {
+        throw error;
+      }
+
+      Alert.alert('Success', 'Communication schedule deleted successfully!');
+      await loadCommunicationSchedules();
+    } catch (error) {
+      console.error('Error deleting communication schedule:', error);
+      Alert.alert('Error', 'Failed to delete communication schedule.');
+    }
+  }, [loadCommunicationSchedules]);
+
+  // Test Data Generation
+  const handleGenerateTestData = useCallback(async () => {
+    Alert.alert(
+      'Generate Test Data',
+      'This will populate all shops with test check-in data based on the provided data. This may take a few moments.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Generate',
+          onPress: async () => {
+            try {
+              await generateTestCheckIns();
+              Alert.alert('Success', 'Test data generated successfully!');
+            } catch (error) {
+              console.error('Error generating test data:', error);
+              Alert.alert('Error', 'Failed to generate test data.');
+            }
+          }
+        }
+      ]
+    );
+  }, [generateTestCheckIns]);
 
   if (!visible) return null;
 
@@ -475,7 +582,7 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                   styles.tabText,
                   { color: activeTab === 'goals' ? theme.colors.primary : theme.dark ? '#666' : '#999' }
                 ]}>
-                  Metric Goals
+                  KPI Goals
                 </Text>
               </TouchableOpacity>
             </View>
@@ -499,7 +606,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                       Add New Shop
                     </Text>
                     
-                    {/* Fixed: Better layout for shop form */}
                     <View style={styles.shopFormContainer}>
                       <View style={styles.shopFormRow}>
                         <View style={styles.shopNumberContainer}>
@@ -541,7 +647,7 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                     </View>
                   </GlassView>
 
-                  {/* Shops List - Sorted by shop number */}
+                  {/* Shops List */}
                   <GlassView style={[
                     styles.section,
                     Platform.OS !== 'ios' && { backgroundColor: theme.dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }
@@ -551,7 +657,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                     </Text>
                     
                     {sortedShops.map((shop) => {
-                      // FIXED: Check if shop is assigned to any district
                       const isAssignedToDistrict = setupData?.districts.some(district => 
                         district.shopIds.includes(shop.id)
                       );
@@ -595,7 +700,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                                 <Text style={[styles.shopName, { color: theme.colors.text }]}>
                                   {shop.name || 'Name Here'}
                                 </Text>
-                                {/* FIXED: Show district assignment status */}
                                 {isAssignedToDistrict && (
                                   <Text style={[styles.assignmentStatus, { color: theme.colors.primary }]}>
                                     Assigned to District
@@ -611,7 +715,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                                 <TouchableOpacity onPress={() => handleEditShop(shop)} style={styles.iconButton}>
                                   <IconSymbol name="pencil" size={16} color={theme.colors.primary} />
                                 </TouchableOpacity>
-                                {/* FIXED: Only show delete button if shop is not assigned to district */}
                                 <TouchableOpacity 
                                   onPress={() => {
                                     console.log('Trash icon pressed for shop:', shop);
@@ -638,7 +741,7 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                     })}
                   </GlassView>
 
-                  {/* FIXED: Show unassigned shops section */}
+                  {/* Unassigned shops section */}
                   {unassignedShops.length > 0 && (
                     <GlassView style={[
                       styles.section,
@@ -792,7 +895,6 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                               <Text style={[styles.shopCount, { color: theme.dark ? '#666' : '#999' }]}>
                                 {district.shopIds.length} shops
                               </Text>
-                              {/* FIXED: Show shop numbers in district */}
                               <View style={styles.districtShopsPreview}>
                                 {district.shopIds.slice(0, 5).map((shopId) => {
                                   const shop = setupData?.shops.find(s => s.id === shopId);
@@ -824,57 +926,24 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                   </GlassView>
                 </View>
               ) : (
-                // Metric Goals Tab
+                // KPI Goals Tab
                 <View style={styles.tabContent}>
+                  {/* KPI Goals Section */}
                   <GlassView style={[
                     styles.section,
                     Platform.OS !== 'ios' && { backgroundColor: theme.dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }
                   ]} glassEffectStyle="regular">
                     <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                      Metric Goals for Outlier Detection
+                      KPI Goals
                     </Text>
                     <Text style={[styles.goalsDescription, { color: theme.dark ? '#98989D' : '#666' }]}>
-                      Set minimum goals for each metric. Shops missing 3 or more goals will be marked as outliers.
+                      Set percentage goals for KPI metrics. These are used for ranking and outlier detection.
                     </Text>
                     
                     <View style={styles.goalsGrid}>
                       <View style={styles.goalRow}>
                         <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Cars</Text>
-                          <TextInput
-                            style={[styles.goalInput, { 
-                              color: theme.colors.text,
-                              borderColor: theme.dark ? '#333' : '#ddd',
-                              backgroundColor: theme.dark ? '#222' : '#fff'
-                            }]}
-                            value={goalsCars}
-                            onChangeText={setGoalsCars}
-                            placeholder="0"
-                            placeholderTextColor={theme.dark ? '#666' : '#999'}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                        
-                        <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Sales ($)</Text>
-                          <TextInput
-                            style={[styles.goalInput, { 
-                              color: theme.colors.text,
-                              borderColor: theme.dark ? '#333' : '#ddd',
-                              backgroundColor: theme.dark ? '#222' : '#fff'
-                            }]}
-                            value={goalsSales}
-                            onChangeText={setGoalsSales}
-                            placeholder="0.00"
-                            placeholderTextColor={theme.dark ? '#666' : '#999'}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      
-                      <View style={styles.goalRow}>
-                        <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Big 4</Text>
+                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Big 4 (%)</Text>
                           <TextInput
                             style={[styles.goalInput, { 
                               color: theme.colors.text,
@@ -890,7 +959,7 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                         </View>
                         
                         <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Coolants</Text>
+                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Coolants (%)</Text>
                           <TextInput
                             style={[styles.goalInput, { 
                               color: theme.colors.text,
@@ -908,7 +977,7 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                       
                       <View style={styles.goalRow}>
                         <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Diffs</Text>
+                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Diffs (%)</Text>
                           <TextInput
                             style={[styles.goalInput, { 
                               color: theme.colors.text,
@@ -924,25 +993,7 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                         </View>
                         
                         <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Donations ($)</Text>
-                          <TextInput
-                            style={[styles.goalInput, { 
-                              color: theme.colors.text,
-                              borderColor: theme.dark ? '#333' : '#ddd',
-                              backgroundColor: theme.dark ? '#222' : '#fff'
-                            }]}
-                            value={goalsDonations}
-                            onChangeText={setGoalsDonations}
-                            placeholder="0.00"
-                            placeholderTextColor={theme.dark ? '#666' : '#999'}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      
-                      <View style={styles.goalRow}>
-                        <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Mobil1</Text>
+                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Mobil1 (%)</Text>
                           <TextInput
                             style={[styles.goalInput, { 
                               color: theme.colors.text,
@@ -956,58 +1007,115 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                             keyboardType="numeric"
                           />
                         </View>
-                        
-                        <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Staffing</Text>
-                          <TextInput
-                            style={[styles.goalInput, { 
-                              color: theme.colors.text,
-                              borderColor: theme.dark ? '#333' : '#ddd',
-                              backgroundColor: theme.dark ? '#222' : '#fff'
-                            }]}
-                            value={goalsStaffing}
-                            onChangeText={setGoalsStaffing}
-                            placeholder="0"
-                            placeholderTextColor={theme.dark ? '#666' : '#999'}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      
-                      <View style={styles.goalRow}>
-                        <View style={styles.goalItem}>
-                          <Text style={[styles.goalLabel, { color: theme.colors.text }]}>Temperature Goal</Text>
-                          <View style={styles.temperatureSelector}>
-                            {(['red', 'yellow', 'green'] as const).map((temp) => (
-                              <TouchableOpacity
-                                key={temp}
-                                style={[
-                                  styles.temperatureOption,
-                                  goalsTemperature === temp && styles.selectedTemperatureOption,
-                                  { 
-                                    backgroundColor: temp === 'red' ? '#ef4444' : 
-                                                   temp === 'yellow' ? '#f59e0b' : '#22c55e',
-                                    opacity: goalsTemperature === temp ? 1 : 0.3
-                                  }
-                                ]}
-                                onPress={() => setGoalsTemperature(temp)}
-                              >
-                                <Text style={styles.temperatureOptionText}>
-                                  {temp.charAt(0).toUpperCase() + temp.slice(1)}
-                                </Text>
-                              </TouchableOpacity>
-                            ))}
-                          </View>
-                        </View>
                       </View>
                     </View>
                     
-                    <Button onPress={handleSaveMetricGoals} variant="primary" style={styles.saveGoalsButton}>
-                      Save Metric Goals
+                    <Button onPress={handleSaveKPIGoals} variant="primary" style={styles.saveGoalsButton}>
+                      Save KPI Goals
+                    </Button>
+                  </GlassView>
+
+                  {/* Communication Schedule Section */}
+                  <GlassView style={[
+                    styles.section,
+                    Platform.OS !== 'ios' && { backgroundColor: theme.dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }
+                  ]} glassEffectStyle="regular">
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                      Communication Schedule
+                    </Text>
+                    <Text style={[styles.goalsDescription, { color: theme.dark ? '#98989D' : '#666' }]}>
+                      Schedule messages to appear as pop-ups when users open the app.
+                    </Text>
+                    
+                    {/* Add New Schedule */}
+                    <View style={styles.scheduleForm}>
+                      <TextInput
+                        style={[styles.input, { 
+                          color: theme.colors.text,
+                          borderColor: theme.dark ? '#333' : '#ddd',
+                          backgroundColor: theme.dark ? '#222' : '#fff',
+                          marginBottom: 12
+                        }]}
+                        value={newMessage}
+                        onChangeText={setNewMessage}
+                        placeholder="Enter message"
+                        placeholderTextColor={theme.dark ? '#666' : '#999'}
+                        multiline
+                      />
+                      
+                      <View style={styles.timeInputContainer}>
+                        <Text style={[styles.inputLabel, { color: theme.colors.text }]}>Schedule Time:</Text>
+                        <TextInput
+                          style={[styles.timeInput, { 
+                            color: theme.colors.text,
+                            borderColor: theme.dark ? '#333' : '#ddd',
+                            backgroundColor: theme.dark ? '#222' : '#fff'
+                          }]}
+                          value={newScheduleTime}
+                          onChangeText={setNewScheduleTime}
+                          placeholder="09:00"
+                          placeholderTextColor={theme.dark ? '#666' : '#999'}
+                        />
+                      </View>
+                      
+                      <Button onPress={handleAddCommunicationSchedule} variant="primary" style={styles.addButton}>
+                        Add Schedule
+                      </Button>
+                    </View>
+
+                    {/* Existing Schedules */}
+                    {communicationSchedules.length > 0 && (
+                      <View style={styles.schedulesList}>
+                        <Text style={[styles.subsectionTitle, { color: theme.colors.text }]}>
+                          Scheduled Messages ({communicationSchedules.length})
+                        </Text>
+                        
+                        {communicationSchedules.map((schedule) => (
+                          <View key={schedule.id} style={[styles.scheduleItem, { 
+                            borderColor: theme.dark ? '#333' : '#eee',
+                            backgroundColor: theme.dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.02)'
+                          }]}>
+                            <View style={styles.scheduleContent}>
+                              <Text style={[styles.scheduleMessage, { color: theme.colors.text }]}>
+                                {schedule.message}
+                              </Text>
+                              <Text style={[styles.scheduleTime, { color: theme.dark ? '#98989D' : '#666' }]}>
+                                Daily at {schedule.schedule_time}
+                              </Text>
+                            </View>
+                            <TouchableOpacity 
+                              onPress={() => handleDeleteCommunicationSchedule(schedule.id)}
+                              style={[styles.iconButton, styles.deleteButton]}
+                            >
+                              <IconSymbol name="trash" size={16} color="white" />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </GlassView>
+
+                  {/* Test Data Section */}
+                  <GlassView style={[
+                    styles.section,
+                    Platform.OS !== 'ios' && { backgroundColor: theme.dark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.05)' }
+                  ]} glassEffectStyle="regular">
+                    <View style={styles.testDataHeader}>
+                      <IconSymbol name="flask" size={20} color="#22c55e" />
+                      <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                        Test Data Generation
+                      </Text>
+                    </View>
+                    <Text style={[styles.goalsDescription, { color: theme.dark ? '#98989D' : '#666' }]}>
+                      Generate test check-in data for all shops based on the provided data. This will populate all 4 check-in time slots with realistic data.
+                    </Text>
+                    
+                    <Button onPress={handleGenerateTestData} variant="secondary" style={styles.testDataButton}>
+                      Generate Test Data
                     </Button>
                   </GlassView>
                   
-                  {/* Current Goals Display */}
+                  {/* Current KPI Goals Display */}
                   {setupData?.metricGoals && (
                     <GlassView style={[
                       styles.section,
@@ -1016,53 +1124,26 @@ export default function MasterSetupScreen({ visible, onClose }: MasterSetupScree
                       <View style={styles.currentGoalsHeader}>
                         <IconSymbol name="target" size={20} color="#22c55e" />
                         <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                          Current Goals
+                          Current KPI Goals
                         </Text>
                       </View>
                       
                       <View style={styles.currentGoalsGrid}>
                         <View style={styles.currentGoalItem}>
-                          <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Cars</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.cars}</Text>
-                        </View>
-                        <View style={styles.currentGoalItem}>
-                          <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Sales</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>${setupData.metricGoals.sales}</Text>
-                        </View>
-                        <View style={styles.currentGoalItem}>
                           <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Big 4</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.big4}</Text>
+                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.big4}%</Text>
                         </View>
                         <View style={styles.currentGoalItem}>
                           <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Coolants</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.coolants}</Text>
+                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.coolants}%</Text>
                         </View>
                         <View style={styles.currentGoalItem}>
                           <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Diffs</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.diffs}</Text>
-                        </View>
-                        <View style={styles.currentGoalItem}>
-                          <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Donations</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>${setupData.metricGoals.donations}</Text>
+                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.diffs}%</Text>
                         </View>
                         <View style={styles.currentGoalItem}>
                           <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Mobil1</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.mobil1}</Text>
-                        </View>
-                        <View style={styles.currentGoalItem}>
-                          <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Staffing</Text>
-                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.staffing}</Text>
-                        </View>
-                        <View style={styles.currentGoalItem}>
-                          <Text style={[styles.currentGoalLabel, { color: theme.dark ? '#98989D' : '#666' }]}>Temperature</Text>
-                          <View style={[styles.currentTemperatureBadge, { 
-                            backgroundColor: setupData.metricGoals.temperature === 'red' ? '#ef4444' : 
-                                           setupData.metricGoals.temperature === 'yellow' ? '#f59e0b' : '#22c55e'
-                          }]}>
-                            <Text style={styles.currentTemperatureText}>
-                              {setupData.metricGoals.temperature.charAt(0).toUpperCase() + setupData.metricGoals.temperature.slice(1)}
-                            </Text>
-                          </View>
+                          <Text style={[styles.currentGoalValue, { color: theme.colors.text }]}>{setupData.metricGoals.mobil1}%</Text>
                         </View>
                       </View>
                     </GlassView>
@@ -1179,7 +1260,6 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 12,
   },
-  // Fixed: Better shop form layout
   shopFormContainer: {
     gap: 16,
   },
@@ -1208,7 +1288,7 @@ const styles = StyleSheet.create({
     // Specific styling for shop number input
   },
   shopNameInput: {
-    // Specific styling for shop name input - ensures it's not cut off
+    // Specific styling for shop name input
   },
   editInput: {
     flex: 1,
@@ -1245,7 +1325,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 2,
   },
-  // FIXED: New styles for assignment status and district previews
   assignmentStatus: {
     fontSize: 12,
     fontWeight: '500',
@@ -1322,7 +1401,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
-  // FIXED: New styles for unassigned shops section
   unassignedHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1334,7 +1412,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     lineHeight: 20,
   },
-  // Goals section styles
   goalsDescription: {
     fontSize: 14,
     marginBottom: 20,
@@ -1362,26 +1439,56 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
   },
-  temperatureSelector: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  temperatureOption: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectedTemperatureOption: {
-    // Selected styling handled by opacity
-  },
-  temperatureOptionText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
-  },
   saveGoalsButton: {
+    alignSelf: 'flex-start',
+  },
+  // Communication Schedule styles
+  scheduleForm: {
+    marginBottom: 20,
+  },
+  timeInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  timeInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 8,
+    fontSize: 14,
+    width: 80,
+  },
+  schedulesList: {
+    marginTop: 20,
+  },
+  scheduleItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  scheduleContent: {
+    flex: 1,
+  },
+  scheduleMessage: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  scheduleTime: {
+    fontSize: 12,
+  },
+  // Test Data styles
+  testDataHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  testDataButton: {
     alignSelf: 'flex-start',
   },
   currentGoalsHeader: {
@@ -1406,16 +1513,6 @@ const styles = StyleSheet.create({
   },
   currentGoalValue: {
     fontSize: 16,
-    fontWeight: '600',
-  },
-  currentTemperatureBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  currentTemperatureText: {
-    color: 'white',
-    fontSize: 12,
     fontWeight: '600',
   },
 });

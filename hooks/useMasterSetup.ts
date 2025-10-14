@@ -16,6 +16,7 @@ export const useMasterSetup = () => {
   // Load setup data from Supabase
   const loadSetupData = useCallback(async () => {
     try {
+      console.log('useMasterSetup: Loading setup data...');
       setLoading(true);
       setError(null);
 
@@ -87,12 +88,15 @@ export const useMasterSetup = () => {
         temperature: goalsData.temperature || 'green'
       } : undefined;
 
-      setSetupData({
+      const setupDataResult = {
         shops,
         districts,
         metricGoals,
         lastUpdated: new Date().toISOString()
-      });
+      };
+      
+      console.log('useMasterSetup: Loaded setup data:', setupDataResult);
+      setSetupData(setupDataResult);
 
     } catch (err) {
       console.error('Error loading setup data:', err);
@@ -421,11 +425,17 @@ export const useMasterSetup = () => {
     }
   }, [loadSetupData]);
 
+  // Refresh setup data
+  const refreshSetupData = useCallback(async () => {
+    await loadSetupData();
+  }, [loadSetupData]);
+
   return {
     setupData,
     loading,
     error,
     loadSetupData,
+    refreshSetupData,
     addShop,
     updateShop,
     deleteShop,

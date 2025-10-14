@@ -26,10 +26,21 @@ export interface MetricGoals {
   temperature: 'red' | 'yellow' | 'green';
 }
 
+export interface CommunicationSchedule {
+  id: string;
+  message: string;
+  schedule_time: string;
+  schedule_days: string[];
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface MasterSetupData {
   shops: MasterShop[];
   districts: District[];
   metricGoals?: MetricGoals;
+  communicationSchedules?: CommunicationSchedule[];
   lastUpdated: string;
 }
 

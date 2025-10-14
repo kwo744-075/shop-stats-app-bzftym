@@ -1,18 +1,15 @@
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { useHierarchyData } from "@/hooks/useHierarchyData";
 import { useTheme } from "@react-navigation/native";
 import { useCheckInData } from "@/hooks/useCheckInData";
 import { useMasterSetup } from "@/hooks/useMasterSetup";
-import DashboardCard from "@/components/DashboardCard";
 import { useRouter } from "expo-router";
-import { FlatList, StyleSheet, View, Text, Platform, Switch, TouchableOpacity, Image, RefreshControl } from "react-native";
-import { scheduleCheckInNotifications } from "@/utils/notificationService";
+import { FlatList, StyleSheet, View, Text, TouchableOpacity, Image, RefreshControl, Switch } from "react-native";
 import { GlassView } from "expo-glass-effect";
-import { IconSymbol } from "@/components/IconSymbol";
-import { Stack, Link } from "expo-router";
+import { Stack } from "expo-router";
 import FloatingChatButton from "@/components/FloatingChatButton";
-import { useNavigationContext } from "@/contexts/NavigationContext";
+import { scheduleCheckInNotifications } from "@/utils/notificationService";
 import { calculateAllOutliers } from "@/utils/outlierCalculations";
 
 const styles = StyleSheet.create({
@@ -38,6 +35,49 @@ const styles = StyleSheet.create({
   },
   cardContainer: {
     marginBottom: 16,
+  },
+  shopCard: {
+    padding: 16,
+    borderRadius: 12,
+    minHeight: 120,
+  },
+  shopCardHeader: {
+    marginBottom: 12,
+  },
+  shopNumber: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  shopName: {
+    fontSize: 14,
+    opacity: 0.8,
+  },
+  shopCardStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  statItem: {
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 2,
+  },
+  statLabel: {
+    fontSize: 12,
+  },
+
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    opacity: 0.7,
   },
   modeToggleContainer: {
     flexDirection: 'row',
@@ -65,71 +105,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    opacity: 0.7,
-  },
 });
 
 export default function HomeScreen() {
-  const { hasInitialized, navigationLoading } = useNavigationContext();
+  const theme = useTheme();
+  const router = useRouter();
+  
+  // Hooks
   const { hierarchy, loading: hierarchyLoading, refreshHierarchy } = useHierarchyData();
+  const { checkInData, loading: checkInLoading, refreshCheckInData } = useCheckInData();
+  const { setupData, loading: setupLoading } = useMasterSetup();
+  
+  // State
   const [refreshing, setRefreshing] = useState(false);
   const [showOutliers, setShowOutliers] = useState(false);
-  const [setupNotifications, setSetupNotifications] = useState(false);
-  const theme = useTheme();
-  const { checkInData, loading: checkInLoading, refreshCheckInData } = useCheckInData();
-  const router = useRouter();
-  const flatListRef = useRef<FlatList>(null);
-  const { setupData, loading: setupLoading } = useMasterSetup();
+  const [notificationsSetup, setNotificationsSetup] = useState(false);
 
-  // Memoize outlier calculations
+  console.log('HomeScreen render - hierarchyLoading:', hierarchyLoading);
+  console.log('HomeScreen render - checkInLoading:', checkInLoading);
+  console.log('HomeScreen render - setupLoading:', setupLoading);
+  console.log('HomeScreen render - hierarchy:', hierarchy ? `loaded with ${hierarchy.shops?.length || 0} shops` : 'null');
+  console.log('HomeScreen render - checkInData:', checkInData ? `loaded for ${Object.keys(checkInData).length} shops` : 'null');
+
+  // Setup notifications once
+  useEffect(() => {
+    if (!notificationsSetup) {
+      console.log('HomeScreen: Setting up notifications...');
+      try {
+        scheduleCheckInNotifications();
+        setNotificationsSetup(true);
+      } catch (error) {
+        console.error('HomeScreen: Error setting up notifications:', error);
+        setNotificationsSetup(true); // Still mark as setup to avoid infinite retries
+      }
+    }
+  }, [notificationsSetup]);
+
+  // Calculate outliers
   const outliers = useMemo(() => {
-    if (!checkInData || !setupData?.metricGoals || !hierarchy?.shops) {
+    try {
+      if (!checkInData || !setupData?.metricGoals || !hierarchy?.shops) {
+        console.log('HomeScreen: Outlier calculation skipped - missing data');
+        return [];
+      }
+
+      console.log('HomeScreen: Calculating outliers...');
+      const shopDataMap = new Map(
+        Object.entries(checkInData).map(([shopId, data]) => [shopId, data])
+      );
+
+      const allShops = hierarchy.shops.map(shop => ({
+        id: shop.id,
+        number: shop.number,
+        name: shop.name
+      }));
+
+      const result = calculateAllOutliers(shopDataMap, setupData.metricGoals, allShops);
+      console.log('HomeScreen: Calculated', result.length, 'outliers');
+      return result;
+    } catch (error) {
+      console.error('HomeScreen: Error calculating outliers:', error);
       return [];
     }
-
-    const shopDataMap = new Map(
-      Object.entries(checkInData).map(([shopId, data]) => [shopId, data])
-    );
-
-    const allShops = hierarchy.shops.map(shop => ({
-      id: shop.id,
-      number: shop.number,
-      name: shop.name
-    }));
-
-    return calculateAllOutliers(shopDataMap, setupData.metricGoals, allShops);
   }, [checkInData, setupData?.metricGoals, hierarchy?.shops]);
 
-  // Setup notifications on first load
-  useEffect(() => {
-    if (hasInitialized && !navigationLoading && !setupNotifications) {
-      console.log('Setting up notifications...');
-      scheduleCheckInNotifications();
-      setSetupNotifications(true);
-    }
-  }, [hasInitialized, navigationLoading, setupNotifications]);
-
-  // Auto-refresh data periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!refreshing && !hierarchyLoading && !checkInLoading) {
-        console.log('Auto-refreshing data...');
-        refreshHierarchy();
-        refreshCheckInData();
-      }
-    }, 300000); // 5 minutes
-
-    return () => clearInterval(interval);
-  }, [refreshing, hierarchyLoading, checkInLoading, refreshHierarchy, refreshCheckInData]);
-
+  // Refresh handler
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -144,10 +184,7 @@ export default function HomeScreen() {
     }
   }, [refreshHierarchy, refreshCheckInData]);
 
-  const getCurrentMode = useCallback(() => {
-    return showOutliers ? 'outliers' : 'normal';
-  }, [showOutliers]);
-
+  // Get filtered shops
   const getFilteredShops = useCallback(() => {
     if (!hierarchy?.shops) return [];
     
@@ -161,28 +198,79 @@ export default function HomeScreen() {
     return hierarchy.shops.filter(shop => shop.isActive);
   }, [hierarchy?.shops, showOutliers, outliers]);
 
+  // Shop card renderer
   const renderShopCard = useCallback(({ item: shop }: { item: any }) => {
     const shopData = checkInData?.[shop.id];
     const isOutlier = outliers.some(o => o.shopId === shop.id);
     
+    // Calculate totals for display
+    const totalSales = shopData?.sales || 0;
+    const totalCars = shopData?.cars || 0;
+    const totalBig4 = shopData?.big4 || 0;
+    
     return (
-      <View style={styles.cardContainer}>
-        <DashboardCard
-          key={shop.id}
-          shop={shop}
-          data={shopData}
-          onPress={() => router.push(`/formsheet?shopId=${shop.id}&shopNumber=${shop.number}`)}
-        />
-        {isOutlier && (
-          <View style={styles.outlierBadge}>
-            <Text style={styles.outlierBadgeText}>OUTLIER</Text>
+      <TouchableOpacity 
+        style={styles.cardContainer}
+        onPress={() => router.push(`/formsheet?shopId=${shop.id}&shopNumber=${shop.number}`)}
+      >
+        <GlassView 
+          style={[
+            styles.shopCard,
+            { backgroundColor: theme.dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.02)' }
+          ]} 
+          glassEffectStyle="regular"
+        >
+          <View style={styles.shopCardHeader}>
+            <Text style={[styles.shopNumber, { color: theme.colors.text }]}>
+              Shop #{shop.number}
+            </Text>
+            <Text style={[styles.shopName, { color: theme.colors.text }]}>
+              {shop.name}
+            </Text>
           </View>
-        )}
-      </View>
+          
+          <View style={styles.shopCardStats}>
+            <View style={styles.statItem}>
+              <Text style={[styles.statValue, { color: theme.colors.text }]}>
+                {totalCars}
+              </Text>
+              <Text style={[styles.statLabel, { color: theme.dark ? '#98989D' : '#666' }]}>
+                Cars
+              </Text>
+            </View>
+            
+            <View style={styles.statItem}>
+              <Text style={[styles.statValue, { color: theme.colors.text }]}>
+                ${totalSales.toLocaleString()}
+              </Text>
+              <Text style={[styles.statLabel, { color: theme.dark ? '#98989D' : '#666' }]}>
+                Sales
+              </Text>
+            </View>
+            
+            <View style={styles.statItem}>
+              <Text style={[styles.statValue, { color: theme.colors.text }]}>
+                {totalBig4}
+              </Text>
+              <Text style={[styles.statLabel, { color: theme.dark ? '#98989D' : '#666' }]}>
+                Big 4
+              </Text>
+            </View>
+          </View>
+          
+          {isOutlier && (
+            <View style={styles.outlierBadge}>
+              <Text style={styles.outlierBadgeText}>OUTLIER</Text>
+            </View>
+          )}
+        </GlassView>
+      </TouchableOpacity>
     );
-  }, [checkInData, outliers, router]);
+  }, [checkInData, outliers, router, theme]);
 
-  if (!hasInitialized || navigationLoading) {
+  // Show loading screen while loading data
+  if (hierarchyLoading) {
+    console.log('HomeScreen: Showing loading screen');
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         <View style={styles.loadingContainer}>
@@ -198,6 +286,22 @@ export default function HomeScreen() {
     );
   }
 
+  // Show error state if there's an error loading data
+  if (!hierarchy || !hierarchy.shops || hierarchy.shops.length === 0) {
+    console.log('HomeScreen: No hierarchy data available');
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={styles.loadingContainer}>
+          <Text style={[styles.loadingText, { color: theme.colors.text }]}>
+            No shop data available. Please check your connection and try again.
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  console.log('HomeScreen: Rendering main content with', hierarchy.shops.length, 'shops');
+  
   const filteredShops = getFilteredShops();
 
   return (
@@ -233,7 +337,6 @@ export default function HomeScreen() {
 
       {/* Shop Cards */}
       <FlatList
-        ref={flatListRef}
         style={styles.content}
         data={filteredShops}
         renderItem={renderShopCard}
@@ -248,15 +351,6 @@ export default function HomeScreen() {
           />
         }
         contentContainerStyle={{ paddingBottom: 100 }}
-        removeClippedSubviews={true}
-        maxToRenderPerBatch={10}
-        windowSize={10}
-        initialNumToRender={8}
-        getItemLayout={(data, index) => ({
-          length: 200, // Approximate height of each card
-          offset: 200 * index,
-          index,
-        })}
       />
 
       <FloatingChatButton />

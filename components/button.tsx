@@ -1,145 +1,118 @@
 
-import React from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextStyle,
-  useColorScheme,
-  ViewStyle,
-} from "react-native";
-import { appleBlue, zincColors } from "@/constants/Colors";
-
-type ButtonVariant = "primary" | "secondary" | "outline" | "ghost";
-type ButtonSize = "sm" | "md" | "lg";
+import React from 'react';
+import { TouchableOpacity, Text, StyleSheet, ViewStyle, TextStyle } from 'react-native';
+import { useTheme } from '@react-navigation/native';
 
 interface ButtonProps {
-  onPress?: () => void;
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  disabled?: boolean;
-  loading?: boolean;
-  children: React.ReactNode;
+  title?: string;
+  onPress: () => void;
+  variant?: 'primary' | 'secondary' | 'danger';
   style?: ViewStyle;
   textStyle?: TextStyle;
+  disabled?: boolean;
+  children?: React.ReactNode;
 }
 
-export default function Button({
-  onPress,
-  variant = "primary",
-  size = "md",
+export default function Button({ 
+  title, 
+  onPress, 
+  variant = 'primary', 
+  style, 
+  textStyle, 
   disabled = false,
-  loading = false,
-  children,
-  style,
-  textStyle,
+  children 
 }: ButtonProps) {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === "dark";
+  const { colors, dark } = useTheme();
 
-  const getButtonStyle = (): ViewStyle => {
-    const baseStyle: ViewStyle = {
-      borderRadius: 8,
-      alignItems: "center",
-      justifyContent: "center",
-      flexDirection: "row",
+  const getButtonStyle = () => {
+    const baseStyle = {
+      ...styles.button,
+      opacity: disabled ? 0.6 : 1,
     };
 
-    // Size styles
-    switch (size) {
-      case "sm":
-        baseStyle.paddingHorizontal = 12;
-        baseStyle.paddingVertical = 8;
-        baseStyle.minHeight = 32;
-        break;
-      case "lg":
-        baseStyle.paddingHorizontal = 24;
-        baseStyle.paddingVertical = 16;
-        baseStyle.minHeight = 56;
-        break;
-      default: // md
-        baseStyle.paddingHorizontal = 16;
-        baseStyle.paddingVertical = 12;
-        baseStyle.minHeight = 44;
-        break;
-    }
-
-    // Variant styles
     switch (variant) {
-      case "secondary":
-        baseStyle.backgroundColor = isDark ? zincColors[700] : zincColors[200];
-        break;
-      case "outline":
-        baseStyle.backgroundColor = "transparent";
-        baseStyle.borderWidth = 1;
-        baseStyle.borderColor = isDark ? zincColors[600] : zincColors[300];
-        break;
-      case "ghost":
-        baseStyle.backgroundColor = "transparent";
-        break;
-      default: // primary
-        baseStyle.backgroundColor = appleBlue;
-        break;
+      case 'primary':
+        return {
+          ...baseStyle,
+          backgroundColor: colors.primary,
+        };
+      case 'secondary':
+        return {
+          ...baseStyle,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          borderColor: colors.border,
+        };
+      case 'danger':
+        return {
+          ...baseStyle,
+          backgroundColor: '#ef4444',
+        };
+      default:
+        return {
+          ...baseStyle,
+          backgroundColor: colors.primary,
+        };
     }
-
-    // Disabled state
-    if (disabled || loading) {
-      baseStyle.opacity = 0.5;
-    }
-
-    return baseStyle;
   };
 
-  const getTextStyle = (): TextStyle => {
-    const baseTextStyle: TextStyle = {
-      fontWeight: "600",
+  const getTextStyle = () => {
+    const baseTextStyle = {
+      ...styles.buttonText,
+      fontWeight: '600' as const,
     };
 
-    // Size styles
-    switch (size) {
-      case "sm":
-        baseTextStyle.fontSize = 14;
-        break;
-      case "lg":
-        baseTextStyle.fontSize = 18;
-        break;
-      default: // md
-        baseTextStyle.fontSize = 16;
-        break;
-    }
-
-    // Variant styles
     switch (variant) {
-      case "secondary":
-        baseTextStyle.color = isDark ? zincColors[100] : zincColors[900];
-        break;
-      case "outline":
-      case "ghost":
-        baseTextStyle.color = isDark ? zincColors[100] : zincColors[900];
-        break;
-      default: // primary
-        baseTextStyle.color = "white";
-        break;
+      case 'primary':
+        return {
+          ...baseTextStyle,
+          color: 'white', // Always white on primary buttons for contrast
+        };
+      case 'secondary':
+        return {
+          ...baseTextStyle,
+          color: colors.text, // Use theme text color for secondary buttons
+        };
+      case 'danger':
+        return {
+          ...baseTextStyle,
+          color: 'white', // Always white on danger buttons for contrast
+        };
+      default:
+        return {
+          ...baseTextStyle,
+          color: 'white',
+        };
     }
-
-    return baseTextStyle;
   };
 
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled || loading}
+    <TouchableOpacity
       style={[getButtonStyle(), style]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}
     >
-      {loading && (
-        <ActivityIndicator
-          size="small"
-          color={variant === "primary" ? "white" : appleBlue}
-          style={{ marginRight: 8 }}
-        />
+      {children || (
+        <Text style={[getTextStyle(), textStyle]}>
+          {title}
+        </Text>
       )}
-      <Text style={[getTextStyle(), textStyle]}>{children}</Text>
-    </Pressable>
+    </TouchableOpacity>
   );
 }
+
+const styles = StyleSheet.create({
+  button: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  buttonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});

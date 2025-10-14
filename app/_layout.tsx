@@ -23,6 +23,7 @@ import { WidgetProvider } from "@/contexts/WidgetContext";
 import LoadingScreen from "@/components/LoadingScreen";
 import { useColorScheme, Alert } from "react-native";
 import { migrateDataToSupabase, promptDataMigration } from "@/utils/dataMigration";
+import { initializeCommunicationService } from "@/utils/communicationService";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -76,6 +77,21 @@ export default function RootLayout() {
     if (loaded && !migrationChecked) {
       checkMigration();
     }
+  }, [loaded, migrationChecked, networkState.isConnected]);
+
+  // Initialize communication service
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    
+    if (loaded && migrationChecked && networkState.isConnected) {
+      cleanup = initializeCommunicationService();
+    }
+    
+    return () => {
+      if (cleanup) {
+        cleanup();
+      }
+    };
   }, [loaded, migrationChecked, networkState.isConnected]);
 
   // Show network status alerts
